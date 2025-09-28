@@ -1,0 +1,17 @@
+[tabs]
+total = 5
+
+[theme]
+font = "Arial"
+color = "hsl(203 100% 30%)"
+
+# use hsl. try from https://www.hslpicker.com/
+auto_hsl = false
+hue = 18
+saturation = 100
+lightness = 42
+increment_on = "hue"
+
+[window]
+size = "400x600"
+resizeble = true
