@@ -568,18 +568,7 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 			prev := activeIndex
 			activeIndex = idx
 
-			// 对旧内容执行淡出动画，并在动画结束后隐藏它
-			if prev >= 0 && prev < len(contentWrappers) {
-				go func(w fyne.CanvasObject) {
-					if c, ok := w.(*fyne.Container); ok {
-						animateFade(c, false)
-					}
-					// 隐藏旧内容（在动画完成后），在主线程执行 Hide
-					fyne.Do(func() {
-						w.Hide()
-					})
-				}(contentWrappers[prev])
-			}
+			// 旧的淡入/淡出逻辑将由滑动动画替代 —— 这里只保留占位以便后续调用 animateSlide
 
 			// 更新所有内容的背景色（根据当前激活索引决定是否降低饱和度）
 			for j := range contentWrappers {
@@ -599,15 +588,33 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 				rect.Refresh()
 			}
 
-			// 准备并显示新激活内容（先将其元素 alpha 置为 0，然后淡入）
-			if newC, ok := contentWrappers[activeIndex].(*fyne.Container); ok {
-				// 先确保所有子元素 alpha 为 0（透明）
-				setAlphaForContainer(newC, 0)
+			// 使用滑动动画展示新内容：根据索引决定方向（新索引 > 旧索引 则向左滑出/从右侧进）
+			oldObj := contentWrappers[prev]
+			newObj := contentWrappers[activeIndex]
+			left := idx > prev
+
+			// 确保新内容先显示并放在起始位置（离开视窗）
+			if newC, ok := newObj.(*fyne.Container); ok {
+				if len(newC.Objects) > 1 {
+					if innerNew := newC.Objects[1]; innerNew != nil {
+						if left {
+							innerNew.Move(fyne.NewPos(newC.Size().Width, 0))
+						} else {
+							innerNew.Move(fyne.NewPos(-newC.Size().Width, 0))
+						}
+					}
+				}
+				newC.Show()
+			} else if newObj != nil {
+				newObj.Show()
 			}
-			contentWrappers[activeIndex].Show()
-			// 异步淡入展示
-			if newC, ok := contentWrappers[activeIndex].(*fyne.Container); ok {
-				go animateFade(newC, true)
+
+			// 如果没有旧内容，直接展示并刷新按钮
+			if oldObj == nil {
+				refreshButtons()
+			} else {
+				// 执行动画（在 animateSlide 中会在完成后隐藏旧的内容）
+				animateSlide(oldObj, newObj, left)
 			}
 
 			refreshButtons()
@@ -739,48 +746,88 @@ func (l *verticalTabsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 // foregroundColorFor 根据背景色亮度选择合适的前景色。
-/* 辅助：递归设置容器中可识别对象的 alpha 值（0-255）。
-   支持 *canvas.Rectangle、*canvas.Text、嵌套 *fyne.Container（递归）。每次设置后会刷新对象。 */
-func setAlphaForContainer(c *fyne.Container, a uint8) {
-	for _, obj := range c.Objects {
-		switch o := obj.(type) {
-		case *canvas.Rectangle:
-			col := color.NRGBAModel.Convert(o.FillColor).(color.NRGBA)
-			col.A = a
-			o.FillColor = col
-			canvas.Refresh(o)
-		case *canvas.Text:
-			col := color.NRGBAModel.Convert(o.Color).(color.NRGBA)
-			col.A = a
-			o.Color = col
-			canvas.Refresh(o)
-		case *fyne.Container:
-			setAlphaForContainer(o, a)
-		default:
-			// 其他对象类型暂时不处理
-		}
+/* 辅助：获取内容容器内的“inner content”对象（按 buildTabContentHSL 的结构，index 1 为 content） */
+func getInnerContent(c *fyne.Container) fyne.CanvasObject {
+	if c == nil {
+		return nil
 	}
+	if len(c.Objects) > 1 {
+		return c.Objects[1]
+	}
+	return nil
 }
 
-/* 辅助：对容器内元素执行简单的淡入 / 淡出动画。
-   fadeIn=true 表示从透明到不透明；false 则相反。 */
-func animateFade(c *fyne.Container, fadeIn bool) {
-	steps := 10
-	delay := 20 * time.Millisecond
-	for i := 0; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		if !fadeIn {
-			t = 1 - t
-		}
-		a := uint8(math.Round(255 * t))
+/* 辅助：使用滑动动画将 oldObj 向左滑出并将 newObj 从右侧滑入。
+   left=true 表示旧内容向左滑出（新内容从右侧进入）。动画结束后隐藏旧内容并重置 new 内部位置。 */
+func animateSlide(oldObj, newObj fyne.CanvasObject, left bool) {
+	oldC, _ := oldObj.(*fyne.Container)
+	newC, _ := newObj.(*fyne.Container)
 
-		// 在主线程执行 UI 更新（setAlphaForContainer 内会调用 canvas.Refresh）
-		fyne.Do(func() {
-			setAlphaForContainer(c, a)
-		})
-
-		time.Sleep(delay)
+	// 计算动画区域宽度，优先使用旧内容的宽度
+	var width float32
+	if oldC != nil {
+		width = oldC.Size().Width
+	} else if newC != nil {
+		width = newC.Size().Width
 	}
+	// 若无法获得宽度，退化为直接切换
+	if width == 0 {
+		if oldObj != nil {
+			oldObj.Hide()
+		}
+		if newObj != nil {
+			newObj.Show()
+		}
+		return
+	}
+
+	oldInner := getInnerContent(oldC)
+	newInner := getInnerContent(newC)
+
+	// 确保起始位置
+	if oldInner != nil {
+		oldInner.Move(fyne.NewPos(0, 0))
+	}
+	if newInner != nil {
+		if left {
+			newInner.Move(fyne.NewPos(width, 0))
+		} else {
+			newInner.Move(fyne.NewPos(-width, 0))
+		}
+	}
+
+	// 创建动画（在主循环中执行）
+	duration := 240 * time.Millisecond
+	anim := fyne.NewAnimation(duration, func(progress float32) {
+		var oldX, newX float32
+		if left {
+			oldX = -progress * width
+			newX = width - progress*width
+		} else {
+			oldX = progress * width
+			newX = -width + progress*width
+		}
+		if oldInner != nil {
+			oldInner.Move(fyne.NewPos(oldX, 0))
+		}
+		if newInner != nil {
+			newInner.Move(fyne.NewPos(newX, 0))
+		}
+	})
+	anim.Start()
+
+	// 在动画结束后隐藏旧内容并把 newInner 位置重置为 0
+	go func() {
+		time.Sleep(duration)
+		fyne.Do(func() {
+			if oldObj != nil {
+				oldObj.Hide()
+			}
+			if newInner != nil {
+				newInner.Move(fyne.NewPos(0, 0))
+			}
+		})
+	}()
 }
 
 func foregroundColorFor(background color.Color) color.Color {
