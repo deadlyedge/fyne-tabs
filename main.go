@@ -35,12 +35,14 @@ type settings struct {
 	} `toml:"window"`
 }
 
+// customTheme 在默认主题基础上覆盖主色与字体资源。
 type customTheme struct {
 	base         fyne.Theme
 	primaryColor color.Color
 	fontResource fyne.Resource
 }
 
+// Color 返回指定主题颜色名对应的颜色值，优先使用自定义主色调。
 func (t *customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	switch name {
 	case theme.ColorNamePrimary, theme.ColorNameButton, theme.ColorNameHover, theme.ColorNameFocus:
@@ -50,10 +52,12 @@ func (t *customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant)
 	}
 }
 
+// Icon 委托基础主题提供图标资源。
 func (t *customTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 	return t.base.Icon(name)
 }
 
+// Font 根据文本样式返回字体资源，如提供自定义字体则优先使用。
 func (t *customTheme) Font(style fyne.TextStyle) fyne.Resource {
 	if t.fontResource != nil && !style.Monospace && !style.Symbol {
 		return t.fontResource
@@ -61,10 +65,12 @@ func (t *customTheme) Font(style fyne.TextStyle) fyne.Resource {
 	return t.base.Font(style)
 }
 
+// Size 返回主题中配置的尺寸值。
 func (t *customTheme) Size(name fyne.ThemeSizeName) float32 {
 	return t.base.Size(name)
 }
 
+// main 是应用入口，负责加载配置、应用主题并启动窗口。
 func main() {
 	cfg, err := loadSettings("settings.toml")
 	if err != nil {
@@ -114,6 +120,7 @@ func main() {
 	window.ShowAndRun()
 }
 
+// loadSettings 从给定路径读取 TOML 配置并解析为 settings 结构体。
 func loadSettings(path string) (*settings, error) {
 	var cfg settings
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
@@ -122,6 +129,7 @@ func loadSettings(path string) (*settings, error) {
 	return &cfg, nil
 }
 
+// parseWindowSize 解析形如 "宽x高" 的窗口尺寸字符串，返回宽度、高度与错误信息。
 func parseWindowSize(size string) (float32, float32, error) {
 	cleaned := strings.ToLower(strings.TrimSpace(size))
 	if cleaned == "" {
@@ -146,6 +154,7 @@ func parseWindowSize(size string) (float32, float32, error) {
 	return float32(width), float32(height), nil
 }
 
+// parseColor 根据字符串表达式解析颜色，目前支持 HSL 与十六进制格式。
 func parseColor(value string) (color.Color, error) {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
 	switch {
@@ -158,35 +167,44 @@ func parseColor(value string) (color.Color, error) {
 	}
 }
 
+// parseHex 解析 value 中的 #RRGGBB/#RGB 等十六进制色值，返回颜色对象和解析错误。
 func parseHex(value string) (color.Color, error) {
 	hex := strings.TrimPrefix(value, "#")
-	var r, g, b, a uint8 = 0, 0, 0, 255
 
+	var expanded string
 	switch len(hex) {
-	case 6:
-		parsed, err := strconv.ParseUint(hex, 16, 32)
-		if err != nil {
-			return nil, err
+	case 3, 4:
+		var builder strings.Builder
+		builder.Grow(len(hex) * 2)
+		for _, r := range hex {
+			builder.WriteRune(r)
+			builder.WriteRune(r)
 		}
-		r = uint8(parsed >> 16)
-		g = uint8(parsed >> 8)
-		b = uint8(parsed)
-	case 8:
-		parsed, err := strconv.ParseUint(hex, 16, 32)
-		if err != nil {
-			return nil, err
-		}
-		r = uint8(parsed >> 24)
-		g = uint8(parsed >> 16)
-		b = uint8(parsed >> 8)
-		a = uint8(parsed)
+		expanded = builder.String()
+	case 6, 8:
+		expanded = hex
 	default:
 		return nil, fmt.Errorf("unsupported hex length: %d", len(hex))
 	}
 
-	return color.NRGBA{R: r, G: g, B: b, A: a}, nil
+	if len(expanded) == 6 {
+		expanded += "ff"
+	}
+
+	parsed, err := strconv.ParseUint(expanded, 16, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	return color.NRGBA{
+		R: uint8(parsed >> 24),
+		G: uint8(parsed >> 16),
+		B: uint8(parsed >> 8),
+		A: uint8(parsed),
+	}, nil
 }
 
+// parseHSL 将 HSL 字符串转换为 NRGBA 颜色，返回颜色与可能的错误。
 func parseHSL(value string) (color.Color, error) {
 	inner := strings.TrimSuffix(strings.TrimPrefix(value, "hsl("), ")")
 	inner = strings.ReplaceAll(inner, ",", " ")
@@ -213,6 +231,7 @@ func parseHSL(value string) (color.Color, error) {
 	return hslToNRGBA(hue, sat, light), nil
 }
 
+// parsePercentage 解析带百分号的字符串并返回 0-1 范围的小数。
 func parsePercentage(value string) (float64, error) {
 	trimmed := strings.TrimSuffix(strings.TrimSpace(value), "%")
 	val, err := strconv.ParseFloat(trimmed, 64)
@@ -222,6 +241,7 @@ func parsePercentage(value string) (float64, error) {
 	return val / 100, nil
 }
 
+// hslToNRGBA 将 HSL 数值转换为 NRGBA 颜色。
 func hslToNRGBA(h, s, l float64) color.NRGBA {
 	h = math.Mod(h, 360)
 	if h < 0 {
@@ -256,6 +276,7 @@ func hslToNRGBA(h, s, l float64) color.NRGBA {
 	return color.NRGBA{R: toUint8(r), G: toUint8(g), B: toUint8(b), A: 255}
 }
 
+// loadFontResource 尝试加载字体文件，返回可供 Fyne 使用的资源对象。
 func loadFontResource(font string) (fyne.Resource, error) {
 	font = strings.TrimSpace(font)
 	if font == "" {
@@ -274,81 +295,113 @@ func loadFontResource(font string) (fyne.Resource, error) {
 	return nil, fmt.Errorf("font %q not found in known locations", font)
 }
 
+// fontCandidates 根据配置的字体名生成待尝试的可能文件路径列表。
 func fontCandidates(font string) []string {
-	unique := make(map[string]struct{})
+	seen := make(map[string]struct{})
+	ordered := make([]string, 0, 8)
+
 	add := func(path string) {
 		if path == "" {
 			return
 		}
-		if _, exists := unique[path]; !exists {
-			unique[path] = struct{}{}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		ordered = append(ordered, path)
+	}
+
+	baseNames := make([]string, 0, 2)
+	if font != "" {
+		baseNames = append(baseNames, font)
+		if lower := strings.ToLower(font); lower != font {
+			baseNames = append(baseNames, lower)
 		}
 	}
 
-	add(font)
-
-	fontFileNames := []string{font}
-	lower := strings.ToLower(font)
-	if lower != font {
-		fontFileNames = append(fontFileNames, lower)
-	}
-
 	extensions := []string{"", ".ttf", ".otf", ".ttc"}
-
-	for _, name := range fontFileNames {
+	for _, name := range baseNames {
 		if filepath.Ext(name) != "" {
 			add(name)
 			continue
 		}
 		for _, ext := range extensions {
-			if ext == "" {
-				continue
-			}
 			add(name + ext)
 		}
 	}
 
 	dirs := fontDirectories()
+	results := make([]string, 0, len(ordered)*(len(dirs)+1))
+	resultSeen := make(map[string]struct{})
 
-	var results []string
-	for candidate := range unique {
-		results = append(results, candidate)
+	appendResult := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := resultSeen[path]; ok {
+			return
+		}
+		resultSeen[path] = struct{}{}
+		results = append(results, path)
+	}
+
+	for _, candidate := range ordered {
+		appendResult(candidate)
 		if filepath.IsAbs(candidate) {
 			continue
 		}
 		for _, dir := range dirs {
-			results = append(results, filepath.Join(dir, candidate))
+			appendResult(filepath.Join(dir, candidate))
 		}
 	}
 
 	return results
 }
 
+// fontDirectories 返回当前系统中常见的字体目录，用于查找字体文件。
 func fontDirectories() []string {
-	var dirs []string
+	dirs := make([]string, 0, 6)
+	seen := make(map[string]struct{})
+
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		dirs = append(dirs, path)
+	}
 
 	switch runtime.GOOS {
 	case "windows":
 		if windir := os.Getenv("WINDIR"); windir != "" {
-			dirs = append(dirs, filepath.Join(windir, "Fonts"))
+			add(filepath.Join(windir, "Fonts"))
 		}
 	case "darwin":
-		dirs = append(dirs, "/System/Library/Fonts", "/Library/Fonts", filepath.Join(os.Getenv("HOME"), "Library", "Fonts"))
-	default:
-		dirs = append(dirs, "/usr/share/fonts", "/usr/local/share/fonts")
+		add("/System/Library/Fonts")
+		add("/Library/Fonts")
 		if home, err := os.UserHomeDir(); err == nil {
-			dirs = append(dirs, filepath.Join(home, ".fonts"), filepath.Join(home, ".local", "share", "fonts"))
+			add(filepath.Join(home, "Library", "Fonts"))
+		}
+	default:
+		add("/usr/share/fonts")
+		add("/usr/local/share/fonts")
+		if home, err := os.UserHomeDir(); err == nil {
+			add(filepath.Join(home, ".fonts"))
+			add(filepath.Join(home, ".local", "share", "fonts"))
 		}
 	}
 
 	return dirs
 }
 
+// normalizeTabNames 清洗标签名称，填充或裁剪到 total 指定数量并补全默认名称。
 func normalizeTabNames(total int, names []string) []string {
 	cleaned := make([]string, 0, len(names))
 	for _, name := range names {
-		trimmed := strings.TrimSpace(name)
-		if trimmed != "" {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
 			cleaned = append(cleaned, trimmed)
 		}
 	}
@@ -356,18 +409,22 @@ func normalizeTabNames(total int, names []string) []string {
 	if total <= 0 {
 		total = len(cleaned)
 	}
+	if total <= 0 {
+		return cleaned
+	}
+
+	if len(cleaned) > total {
+		cleaned = cleaned[:total]
+	}
 
 	for len(cleaned) < total {
 		cleaned = append(cleaned, fmt.Sprintf("Tab %d", len(cleaned)+1))
 	}
 
-	if total > 0 && len(cleaned) > total {
-		cleaned = cleaned[:total]
-	}
-
 	return cleaned
 }
 
+// buildTabContent 根据标题与颜色构建单个标签页内容。
 func buildTabContent(title string, tabColor color.Color) fyne.CanvasObject {
 	background := canvas.NewRectangle(tabColor)
 	background.SetMinSize(fyne.NewSize(0, 0))
@@ -378,6 +435,7 @@ func buildTabContent(title string, tabColor color.Color) fyne.CanvasObject {
 	return container.NewMax(background, container.NewCenter(label))
 }
 
+// newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
 func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasObject {
 	if len(names) == 0 || len(contents) == 0 {
 		return widget.NewLabel("No tabs")
@@ -388,22 +446,23 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasOb
 	}
 
 	activeIndex := 0
-
 	buttons := make([]*widget.Button, len(names))
 	contentWrappers := make([]fyne.CanvasObject, len(names))
-	tabObjects := make([]fyne.CanvasObject, 0, len(names)*2)
+	tabObjects := make([]fyne.CanvasObject, len(names)*2)
 
 	refreshButtons := func() {
 		for i, btn := range buttons {
 			if btn == nil {
 				continue
 			}
+			desired := widget.MediumImportance
 			if i == activeIndex {
-				btn.Importance = widget.HighImportance
-			} else {
-				btn.Importance = widget.MediumImportance
+				desired = widget.HighImportance
 			}
-			btn.Refresh()
+			if btn.Importance != desired {
+				btn.Importance = desired
+				btn.Refresh()
+			}
 		}
 	}
 
@@ -424,7 +483,8 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasOb
 		wrapper.Hide()
 		contentWrappers[i] = wrapper
 
-		tabObjects = append(tabObjects, btn, wrapper)
+		tabObjects[2*i] = btn
+		tabObjects[2*i+1] = wrapper
 	}
 
 	contentWrappers[activeIndex].Show()
@@ -433,12 +493,16 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasOb
 	return container.New(&verticalTabsLayout{}, tabObjects...)
 }
 
+// verticalTabsLayout 实现纵向标签的自定义布局逻辑。
 type verticalTabsLayout struct{}
 
+// Layout 将纵向按钮置于顶部，并在按钮下方展开当前激活的标签内容。
 func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	buttonHeights := make([]float32, 0, len(objects)/2)
+	buttonCount := len(objects) / 2
+	buttonHeights := make([]float32, 0, buttonCount)
 	var totalButtonsHeight float32
-	activeContentIndex := -1
+
+	activeButtonIndex := -1
 	var activeContent fyne.CanvasObject
 	var activeContentMin fyne.Size
 
@@ -452,7 +516,7 @@ func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size)
 		if !obj.Visible() {
 			continue
 		}
-		activeContentIndex = i
+		activeButtonIndex = (i - 1) / 2
 		activeContent = obj
 		activeContentMin = obj.MinSize()
 	}
@@ -467,16 +531,12 @@ func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size)
 
 	y := float32(0)
 	buttonIndex := 0
-	activeButtonIndex := activeContentIndex / 2
 
-	for i, obj := range objects {
-		if i%2 != 0 {
-			continue
-		}
-
+	for i := 0; i < len(objects); i += 2 {
+		btn := objects[i]
 		height := buttonHeights[buttonIndex]
-		obj.Resize(fyne.NewSize(size.Width, height))
-		obj.Move(fyne.NewPos(0, y))
+		btn.Resize(fyne.NewSize(size.Width, height))
+		btn.Move(fyne.NewPos(0, y))
 		y += height
 
 		if activeContent != nil && buttonIndex == activeButtonIndex {
@@ -489,6 +549,7 @@ func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size)
 	}
 }
 
+// MinSize 计算布局所需的最小尺寸，确保按钮与内容完整显示。
 func (l *verticalTabsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	var width float32
 	var buttonHeight float32
@@ -514,6 +575,7 @@ func (l *verticalTabsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(width, buttonHeight+contentHeight)
 }
 
+// foregroundColorFor 根据背景色亮度选择合适的前景色。
 func foregroundColorFor(background color.Color) color.Color {
 	nrgba := color.NRGBAModel.Convert(background).(color.NRGBA)
 	luminance := 0.2126*float64(nrgba.R)/255 + 0.7152*float64(nrgba.G)/255 + 0.0722*float64(nrgba.B)/255
