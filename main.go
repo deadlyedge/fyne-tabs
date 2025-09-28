@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -564,9 +565,21 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 			if activeIndex == idx {
 				return
 			}
-			// 隐藏旧的内容
-			contentWrappers[activeIndex].Hide()
+			prev := activeIndex
 			activeIndex = idx
+
+			// 对旧内容执行淡出动画，并在动画结束后隐藏它
+			if prev >= 0 && prev < len(contentWrappers) {
+				go func(w fyne.CanvasObject) {
+					if c, ok := w.(*fyne.Container); ok {
+						animateFade(c, false)
+					}
+					// 隐藏旧内容（在动画完成后），在主线程执行 Hide
+					fyne.Do(func() {
+						w.Hide()
+					})
+				}(contentWrappers[prev])
+			}
 
 			// 更新所有内容的背景色（根据当前激活索引决定是否降低饱和度）
 			for j := range contentWrappers {
@@ -586,8 +599,17 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 				rect.Refresh()
 			}
 
-			// 显示新激活内容并刷新按钮样式
+			// 准备并显示新激活内容（先将其元素 alpha 置为 0，然后淡入）
+			if newC, ok := contentWrappers[activeIndex].(*fyne.Container); ok {
+				// 先确保所有子元素 alpha 为 0（透明）
+				setAlphaForContainer(newC, 0)
+			}
 			contentWrappers[activeIndex].Show()
+			// 异步淡入展示
+			if newC, ok := contentWrappers[activeIndex].(*fyne.Container); ok {
+				go animateFade(newC, true)
+			}
+
 			refreshButtons()
 		})
 		buttons[i] = btn
@@ -717,6 +739,50 @@ func (l *verticalTabsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 // foregroundColorFor 根据背景色亮度选择合适的前景色。
+/* 辅助：递归设置容器中可识别对象的 alpha 值（0-255）。
+   支持 *canvas.Rectangle、*canvas.Text、嵌套 *fyne.Container（递归）。每次设置后会刷新对象。 */
+func setAlphaForContainer(c *fyne.Container, a uint8) {
+	for _, obj := range c.Objects {
+		switch o := obj.(type) {
+		case *canvas.Rectangle:
+			col := color.NRGBAModel.Convert(o.FillColor).(color.NRGBA)
+			col.A = a
+			o.FillColor = col
+			canvas.Refresh(o)
+		case *canvas.Text:
+			col := color.NRGBAModel.Convert(o.Color).(color.NRGBA)
+			col.A = a
+			o.Color = col
+			canvas.Refresh(o)
+		case *fyne.Container:
+			setAlphaForContainer(o, a)
+		default:
+			// 其他对象类型暂时不处理
+		}
+	}
+}
+
+/* 辅助：对容器内元素执行简单的淡入 / 淡出动画。
+   fadeIn=true 表示从透明到不透明；false 则相反。 */
+func animateFade(c *fyne.Container, fadeIn bool) {
+	steps := 10
+	delay := 20 * time.Millisecond
+	for i := 0; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		if !fadeIn {
+			t = 1 - t
+		}
+		a := uint8(math.Round(255 * t))
+
+		// 在主线程执行 UI 更新（setAlphaForContainer 内会调用 canvas.Refresh）
+		fyne.Do(func() {
+			setAlphaForContainer(c, a)
+		})
+
+		time.Sleep(delay)
+	}
+}
+
 func foregroundColorFor(background color.Color) color.Color {
 	nrgba := color.NRGBAModel.Convert(background).(color.NRGBA)
 	luminance := 0.2126*float64(nrgba.R)/255 + 0.7152*float64(nrgba.G)/255 + 0.0722*float64(nrgba.B)/255
