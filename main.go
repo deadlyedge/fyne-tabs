@@ -22,7 +22,7 @@ import (
 
 type settings struct {
 	Tabs struct {
-		Total int      `toml:"total"`
+		// Total int      `toml:"total"`
 		Names []string `toml:"names"`
 	} `toml:"tabs"`
 	Theme struct {
@@ -77,10 +77,13 @@ func main() {
 		log.Fatalf("failed to load settings: %v", err)
 	}
 
-	tabColor, err := parseColor(cfg.Theme.Color)
+	// 解析配置颜色为 HSL，之后全程以 HSL 作为内部表示，只有在需要渲染时才转换为 NRGBA。
+	origH, origS, origL, err := parseColorToHSL(cfg.Theme.Color)
 	if err != nil {
 		log.Printf("unable to parse color %q, falling back to default theme color: %v", cfg.Theme.Color, err)
-		tabColor = theme.DefaultTheme().Color(theme.ColorNamePrimary, theme.VariantLight)
+		def := theme.DefaultTheme().Color(theme.ColorNamePrimary, theme.VariantLight)
+		defNR := color.NRGBAModel.Convert(def).(color.NRGBA)
+		origH, origS, origL = nrgbaToHSL(defNR)
 	}
 
 	fontResource, err := loadFontResource(cfg.Theme.Font)
@@ -89,9 +92,10 @@ func main() {
 	}
 
 	application := app.New()
+	// 将内部 HSL 转换为 NRGBA 用于主题主色（只做一次转换）
 	application.Settings().SetTheme(&customTheme{
 		base:         theme.DefaultTheme(),
-		primaryColor: tabColor,
+		primaryColor: hslToNRGBA(origH, origS, origL),
 		fontResource: fontResource,
 	})
 
@@ -105,18 +109,25 @@ func main() {
 	}
 	window.SetFixedSize(!cfg.Window.Resizeable)
 
-	tabNames := normalizeTabNames(cfg.Tabs.Total, cfg.Tabs.Names)
+	tabNames := normalizeTabNames(cfg.Tabs.Names)
 	if len(tabNames) == 0 {
 		log.Println("no tab names provided, falling back to default")
 		tabNames = []string{"Tab"}
 	}
 
+	// 使用 HSL 原始值作为基础色；tabs 数量由 names 决定（已在 normalizeTabNames 中处理）
 	tabContents := make([]fyne.CanvasObject, len(tabNames))
 	for i, name := range tabNames {
-		tabContents[i] = buildTabContent(name, tabColor)
+		h := origH
+		s := origS
+		l := origL
+		if i != 0 {
+			s = clamp01(origS - 0.10) // 未激活 tabs 降低 10% 饱和度
+		}
+		tabContents[i] = buildTabContentHSL(name, h, s, l)
 	}
 
-	window.SetContent(newVerticalTabs(tabNames, tabContents))
+	window.SetContent(newVerticalTabs(tabNames, tabContents, origH, origS, origL))
 	window.ShowAndRun()
 }
 
@@ -155,17 +166,17 @@ func parseWindowSize(size string) (float32, float32, error) {
 }
 
 // parseColor 根据字符串表达式解析颜色，目前支持 HSL 与十六进制格式。
-func parseColor(value string) (color.Color, error) {
-	trimmed := strings.TrimSpace(strings.ToLower(value))
-	switch {
-	case strings.HasPrefix(trimmed, "hsl("):
-		return parseHSL(trimmed)
-	case strings.HasPrefix(trimmed, "#"):
-		return parseHex(trimmed)
-	default:
-		return nil, fmt.Errorf("unsupported color format: %s", value)
-	}
-}
+// func parseColor(value string) (color.Color, error) {
+// 	trimmed := strings.TrimSpace(strings.ToLower(value))
+// 	switch {
+// 	case strings.HasPrefix(trimmed, "hsl("):
+// 		return parseHSL(trimmed)
+// 	case strings.HasPrefix(trimmed, "#"):
+// 		return parseHex(trimmed)
+// 	default:
+// 		return nil, fmt.Errorf("unsupported color format: %s", value)
+// 	}
+// }
 
 // parseHex 解析 value 中的 #RRGGBB/#RGB 等十六进制色值，返回颜色对象和解析错误。
 func parseHex(value string) (color.Color, error) {
@@ -204,31 +215,67 @@ func parseHex(value string) (color.Color, error) {
 	}, nil
 }
 
-// parseHSL 将 HSL 字符串转换为 NRGBA 颜色，返回颜色与可能的错误。
-func parseHSL(value string) (color.Color, error) {
-	inner := strings.TrimSuffix(strings.TrimPrefix(value, "hsl("), ")")
-	inner = strings.ReplaceAll(inner, ",", " ")
-	fields := strings.Fields(inner)
-	if len(fields) != 3 {
-		return nil, fmt.Errorf("invalid hsl format: %s", value)
-	}
+ // parseHSL 将 HSL 字符串转换为 NRGBA 颜色，返回颜色与可能的错误。
+// func parseHSL(value string) (color.Color, error) {
+// 	inner := strings.TrimSuffix(strings.TrimPrefix(value, "hsl("), ")")
+// 	inner = strings.ReplaceAll(inner, ",", " ")
+// 	fields := strings.Fields(inner)
+// 	if len(fields) != 3 {
+// 		return nil, fmt.Errorf("invalid hsl format: %s", value)
+// 	}
 
-	hue, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hue: %w", err)
-	}
+// 	hue, err := strconv.ParseFloat(fields[0], 64)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("invalid hue: %w", err)
+// 	}
 
-	sat, err := parsePercentage(fields[1])
-	if err != nil {
-		return nil, fmt.Errorf("invalid saturation: %w", err)
-	}
+// 	sat, err := parsePercentage(fields[1])
+// 	if err != nil {
+// 		return nil, fmt.Errorf("invalid saturation: %w", err)
+// 	}
 
-	light, err := parsePercentage(fields[2])
-	if err != nil {
-		return nil, fmt.Errorf("invalid lightness: %w", err)
-	}
+// 	light, err := parsePercentage(fields[2])
+// 	if err != nil {
+// 		return nil, fmt.Errorf("invalid lightness: %w", err)
+// 	}
 
-	return hslToNRGBA(hue, sat, light), nil
+// 	return hslToNRGBA(hue, sat, light), nil
+// }
+
+// parseColorToHSL 解析配置色值并返回 H, S, L（H: 0-360, S/L: 0-1）。
+// 支持 hsl(...) 与 #RRGGBB/#RGB（若为其它格式，返回错误）。
+func parseColorToHSL(value string) (h, s, l float64, err error) {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if strings.HasPrefix(trimmed, "hsl(") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(value, "hsl("), ")")
+		inner = strings.ReplaceAll(inner, ",", " ")
+		fields := strings.Fields(inner)
+		if len(fields) != 3 {
+			return 0, 0, 0, fmt.Errorf("invalid hsl format: %s", value)
+		}
+		hue, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid hue: %w", err)
+		}
+		sat, err := parsePercentage(fields[1])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid saturation: %w", err)
+		}
+		light, err := parsePercentage(fields[2])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid lightness: %w", err)
+		}
+		return hue, sat, light, nil
+	} else if strings.HasPrefix(trimmed, "#") {
+		c, err := parseHex(trimmed)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		n := color.NRGBAModel.Convert(c).(color.NRGBA)
+		h, s, l = nrgbaToHSL(n)
+		return h, s, l, nil
+	}
+	return 0, 0, 0, fmt.Errorf("unsupported color format: %s", value)
 }
 
 // parsePercentage 解析带百分号的字符串并返回 0-1 范围的小数。
@@ -241,7 +288,7 @@ func parsePercentage(value string) (float64, error) {
 	return val / 100, nil
 }
 
-// hslToNRGBA 将 HSL 数值转换为 NRGBA 颜色。
+ // hslToNRGBA 将 HSL 数值转换为 NRGBA 颜色。
 func hslToNRGBA(h, s, l float64) color.NRGBA {
 	h = math.Mod(h, 360)
 	if h < 0 {
@@ -275,6 +322,70 @@ func hslToNRGBA(h, s, l float64) color.NRGBA {
 
 	return color.NRGBA{R: toUint8(r), G: toUint8(g), B: toUint8(b), A: 255}
 }
+
+// nrgbaToHSL 将 color.NRGBA 转为 H, S, L（H: 0-360, S/L: 0-1）
+func nrgbaToHSL(c color.NRGBA) (h, s, l float64) {
+	r := float64(c.R) / 255.0
+	g := float64(c.G) / 255.0
+	b := float64(c.B) / 255.0
+
+	max := math.Max(r, math.Max(g, b))
+	min := math.Min(r, math.Min(g, b))
+	l = (max + min) / 2.0
+
+	if max == min {
+		// 灰色，无饱和度
+		h = 0
+		s = 0
+		return
+	}
+
+	d := max - min
+	if l > 0.5 {
+		s = d / (2.0 - max - min)
+	} else {
+		s = d / (max + min)
+	}
+
+	switch max {
+	case r:
+		h = (g - b) / d
+		if g < b {
+			h += 6
+		}
+	case g:
+		h = (b-r)/d + 2
+	case b:
+		h = (r-g)/d + 4
+	}
+	h = h * 60.0
+	return
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+// adjustSaturationNRGBA 在 NRGBA 颜色上增加（或减少）饱和度（delta 可为负）。
+// delta 是绝对值，比如 -0.10 表示降低 10%（即 -0.10）。
+// func adjustSaturationNRGBA(c color.NRGBA, delta float64) color.NRGBA {
+// 	h, s, l := nrgbaToHSL(c)
+// 	s = clamp01(s + delta)
+// 	return hslToNRGBA(h, s, l)
+// }
+
+// // adjustLightnessNRGBA 在 NRGBA 颜色上增加（或减少）亮度（delta 可为负）。
+// func adjustLightnessNRGBA(c color.NRGBA, delta float64) color.NRGBA {
+// 	h, s, l := nrgbaToHSL(c)
+// 	l = clamp01(l + delta)
+// 	return hslToNRGBA(h, s, l)
+// }
 
 // loadFontResource 尝试加载字体文件，返回可供 Fyne 使用的资源对象。
 func loadFontResource(font string) (fyne.Resource, error) {
@@ -398,7 +509,7 @@ func fontDirectories() []string {
 }
 
 // normalizeTabNames 清洗标签名称，填充或裁剪到 total 指定数量并补全默认名称。
-func normalizeTabNames(total int, names []string) []string {
+func normalizeTabNames(names []string) []string {
 	cleaned := make([]string, 0, len(names))
 	for _, name := range names {
 		if trimmed := strings.TrimSpace(name); trimmed != "" {
@@ -406,37 +517,41 @@ func normalizeTabNames(total int, names []string) []string {
 		}
 	}
 
-	if total <= 0 {
-		total = len(cleaned)
-	}
-	if total <= 0 {
-		return cleaned
-	}
+	// if total <= 0 {
+	// 	total = len(cleaned)
+	// }
+	// if total <= 0 {
+	// 	return cleaned
+	// }
 
-	if len(cleaned) > total {
-		cleaned = cleaned[:total]
-	}
+	// if len(cleaned) > total {
+	// 	cleaned = cleaned[:total]
+	// }
 
-	for len(cleaned) < total {
-		cleaned = append(cleaned, fmt.Sprintf("Tab %d", len(cleaned)+1))
-	}
+	// for len(cleaned) < total {
+	// 	cleaned = append(cleaned, fmt.Sprintf("Tab %d", len(cleaned)+1))
+	// }
 
 	return cleaned
 }
 
-// buildTabContent 根据标题与颜色构建单个标签页内容。
-func buildTabContent(title string, tabColor color.Color) fyne.CanvasObject {
-	background := canvas.NewRectangle(tabColor)
+ // buildTabContentHSL 根据标题与 HSL 颜色构建单个标签页内容（内部使用 HSL）。
+func buildTabContentHSL(title string, h, s, l float64) *fyne.Container {
+	// label 背景在基础色上降低 10% 的亮度
+	labelL := clamp01(l - 0.10)
+	labelBg := hslToNRGBA(h, s, labelL)
+	background := canvas.NewRectangle(labelBg)
 	background.SetMinSize(fyne.NewSize(0, 0))
 
-	label := canvas.NewText(title, foregroundColorFor(tabColor))
+	label := canvas.NewText(title, foregroundColorFor(labelBg))
 	label.Alignment = fyne.TextAlignCenter
 
-	return container.NewMax(background, container.NewCenter(label))
+	return container.NewStack(background, container.NewCenter(label))
 }
 
-// newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
-func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasObject {
+ // newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
+ // originalH, originalS, originalL 为基础 HSL 值（内部统一使用 HSL）
+func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, originalS, originalL float64) fyne.CanvasObject {
 	if len(names) == 0 || len(contents) == 0 {
 		return widget.NewLabel("No tabs")
 	}
@@ -466,25 +581,67 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasOb
 		}
 	}
 
+	// 初始化每个内容的背景颜色，contents 中每个元素应当是 *fyne.Container，
+	// 且其第一个对象为用作背景的 *canvas.Rectangle（由 buildTabContentHSL 创建）。
 	for i, name := range names {
 		idx := i
 		btn := widget.NewButton(name, func() {
 			if activeIndex == idx {
 				return
 			}
+			// 隐藏旧的内容
 			contentWrappers[activeIndex].Hide()
 			activeIndex = idx
+
+			// 更新所有内容的背景色（根据当前激活索引决定是否降低饱和度）
+			for j := range contentWrappers {
+				inner, ok := contents[j].(*fyne.Container)
+				if !ok || len(inner.Objects) == 0 {
+					continue
+				}
+				rect, ok := inner.Objects[0].(*canvas.Rectangle)
+				if !ok {
+					continue
+				}
+				s := originalS
+				if j != activeIndex {
+					s = clamp01(originalS - 0.10)
+				}
+				rect.FillColor = hslToNRGBA(originalH, s, clamp01(originalL-0.10))
+				rect.Refresh()
+			}
+
+			// 显示新激活内容并刷新按钮样式
 			contentWrappers[activeIndex].Show()
 			refreshButtons()
 		})
 		buttons[i] = btn
 
-		wrapper := container.NewMax(contents[i])
+		// 直接使用 contents[i] 作为可显示/隐藏的内容容器
+		wrapper := contents[i]
 		wrapper.Hide()
 		contentWrappers[i] = wrapper
 
 		tabObjects[2*i] = btn
 		tabObjects[2*i+1] = wrapper
+	}
+
+	// 根据初始激活索引更新背景色并显示对应内容
+	for j := range contentWrappers {
+		inner, ok := contents[j].(*fyne.Container)
+		if !ok || len(inner.Objects) == 0 {
+			continue
+		}
+		rect, ok := inner.Objects[0].(*canvas.Rectangle)
+		if !ok {
+			continue
+		}
+		s := originalS
+		if j != activeIndex {
+			s = clamp01(originalS - 0.10)
+		}
+		rect.FillColor = hslToNRGBA(originalH, s, clamp01(originalL-0.10))
+		rect.Refresh()
 	}
 
 	contentWrappers[activeIndex].Show()
