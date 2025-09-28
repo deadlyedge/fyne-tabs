@@ -89,8 +89,6 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 			if activeIndex == idx {
 				return
 			}
-			prev := activeIndex
-			activeIndex = idx
 
 			// 更新所有内容的背景色（根据当前激活索引决定是否降低饱和度）
 			for j := range contentContainers {
@@ -110,36 +108,16 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 				rect.Refresh()
 			}
 
-			// 使用滑动动画展示新内容：old/new 为 contentContainers 的容器（index 1 为 inner content）
-			var oldC, newC fyne.CanvasObject
-			if prev >= 0 && prev < len(contentContainers) {
-				oldC = contentContainers[prev]
-			}
-			if activeIndex >= 0 && activeIndex < len(contentContainers) {
-				newC = contentContainers[activeIndex]
-			}
-			left := idx > prev
-
-			// 将新内容放到起始位置（视窗之外）
-			if nc, ok := newC.(*fyne.Container); ok {
-				if len(nc.Objects) > 1 {
-					if innerNew := nc.Objects[1]; innerNew != nil {
-						if left {
-							innerNew.Move(fyne.NewPos(nc.Size().Width, 0))
-						} else {
-							innerNew.Move(fyne.NewPos(-nc.Size().Width, 0))
-						}
+			// 已移除动画：直接切换 activeIndex 并更新显示与样式（无动画）
+			activeIndex = idx
+			for j := range contentContainers {
+				if contentContainers[j] != nil {
+					if j == activeIndex {
+						contentContainers[j].Show()
+					} else {
+						contentContainers[j].Hide()
 					}
 				}
-				nc.Show()
-			} else if newC != nil {
-				newC.Show()
-			}
-
-			if oldC == nil {
-				refreshHeaders()
-			} else {
-				animateSlide(oldC, newC, left)
 			}
 			refreshHeaders()
 		})
@@ -196,8 +174,11 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 // verticalTabsLayout 实现纵向标签的自定义布局逻辑。
 type verticalTabsLayout struct{}
 
-/* 新版 Layout：每个 objects 项为一个 tab 容器（header, content）。
-   仅显示并布局当前激活 tab 的 content，其余 tab 只显示 header。 */
+/*
+新版 Layout：每个 objects 项为一个 tab 容器（header, content）。
+
+	仅显示并布局当前激活 tab 的 content，其余 tab 只显示 header。
+*/
 func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	count := len(objects)
 	if count == 0 {

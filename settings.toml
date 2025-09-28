@@ -3,7 +3,7 @@ names = ['tab1', 'tab2', 'tab3', 'tab4']
 
 [theme]
 font = "Arial"
-color = "hsl(203 100% 30%)"
+color = "hsl(12 100% 30%)"
 
 # use hsl. try from https://www.hslpicker.com/
 auto_hsl = false
