@@ -68,14 +68,25 @@ type labelButtonRenderer struct {
 }
 
 func (r *labelButtonRenderer) Layout(size fyne.Size) {
-	r.text.Resize(size)
-	r.text.Move(fyne.NewPos(4, 0))
+	// 给 label 增加内边距（左右与上下），并调整可用尺寸
+	const left, right, top, bottom float32 = 6, 6, 2, 2
+	newWidth := size.Width - left - right
+	if newWidth < 0 {
+		newWidth = 0
+	}
+	newHeight := size.Height - top - bottom
+	if newHeight < 0 {
+		newHeight = 0
+	}
+	r.text.Resize(fyne.NewSize(newWidth, newHeight))
+	r.text.Move(fyne.NewPos(left, top))
 }
 
 func (r *labelButtonRenderer) MinSize() fyne.Size {
 	m := r.text.MinSize()
-	// 给左侧一点内边距
-	return fyne.NewSize(m.Width+8, m.Height)
+	// 为 label 提供左右与上下内边距
+	const left, right, top, bottom float32 = 6, 6, 4, 4
+	return fyne.NewSize(m.Width+left+right, m.Height+top+bottom)
 }
 
 func (r *labelButtonRenderer) Refresh() {
