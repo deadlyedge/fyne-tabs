@@ -1,11 +1,91 @@
 package main
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
+
+/*
+labelButton: 一个无圆角、可点击的简单 label 风格按钮，用于替换默认的 widget.Button。
+
+	特点：
+	- 无内置背景（使用外部矩形作为背景以控制圆角与饱和度）
+	- 文本左对齐
+	- 支持 Tapped 事件回调
+*/
+type labelButton struct {
+	widget.BaseWidget
+	text    string
+	onTap   func()
+	onHover func(bool)
+}
+
+func newLabelButton(text string, onTap func(), onHover func(bool)) *labelButton {
+	l := &labelButton{text: text, onTap: onTap, onHover: onHover}
+	l.ExtendBaseWidget(l)
+	return l
+}
+
+func (l *labelButton) CreateRenderer() fyne.WidgetRenderer {
+	txt := canvas.NewText(l.text, color.Black)
+	txt.Alignment = fyne.TextAlignLeading
+	objects := []fyne.CanvasObject{txt}
+	return &labelButtonRenderer{label: l, objects: objects, text: txt}
+}
+
+func (l *labelButton) Tapped(_ *fyne.PointEvent) {
+	if l.onTap != nil {
+		l.onTap()
+	}
+}
+
+func (l *labelButton) TappedSecondary(_ *fyne.PointEvent) {}
+
+// Hover handling (desktop): forward hover state to optional onHover callback.
+func (l *labelButton) MouseIn(*desktop.MouseEvent) {
+	if l.onHover != nil {
+		l.onHover(true)
+	}
+}
+
+func (l *labelButton) MouseMoved(*desktop.MouseEvent) {}
+
+func (l *labelButton) MouseOut() {
+	if l.onHover != nil {
+		l.onHover(false)
+	}
+}
+
+type labelButtonRenderer struct {
+	label   *labelButton
+	objects []fyne.CanvasObject
+	text    *canvas.Text
+}
+
+func (r *labelButtonRenderer) Layout(size fyne.Size) {
+	r.text.Resize(size)
+	r.text.Move(fyne.NewPos(4, 0))
+}
+
+func (r *labelButtonRenderer) MinSize() fyne.Size {
+	m := r.text.MinSize()
+	// 给左侧一点内边距
+	return fyne.NewSize(m.Width+8, m.Height)
+}
+
+func (r *labelButtonRenderer) Refresh() {
+	r.text.Text = r.label.text
+	r.text.Refresh()
+}
+
+func (r *labelButtonRenderer) Objects() []fyne.CanvasObject { return r.objects }
+
+func (r *labelButtonRenderer) Destroy() {}
 
 // twoColumnLayout 简单的两列布局，按 LeftRatio 分配宽度给左列，右列占剩余宽度。
 // 仅支持最多两个子对象，忽略额外对象；高度以可用高度为准。
@@ -61,54 +141,64 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 	}
 
 	activeIndex := 0
-	buttons := make([]*widget.Button, len(names))
+	buttons := make([]fyne.CanvasObject, len(names))
 	statusTexts := make([]*canvas.Text, len(names))
 	contentContainers := make([]*fyne.Container, len(names))
 	tabContainers := make([]fyne.CanvasObject, len(names))
+	// 为每个 header 创建一个背景矩形，用于在非激活时降低饱和度
+	btnBgs := make([]*canvas.Rectangle, len(names))
 
 	refreshHeaders := func() {
+		// 只更新 header 背景饱和度与刷新 label 渲染
+		for i := range btnBgs {
+			if btnBgs[i] == nil {
+				continue
+			}
+			// s := originalS
+			// if i != activeIndex {
+			// 	s = clamp01(originalS - 0.20)
+			// }
+			btnBgs[i].FillColor = hslToNRGBA(originalH, originalS, clamp01(originalL-0.15))
+			btnBgs[i].Refresh()
+		}
+		// 刷新每个 label 的文本（在必要时）
 		for i := range buttons {
 			if buttons[i] == nil {
 				continue
 			}
-			desired := widget.MediumImportance
-			if i == activeIndex {
-				desired = widget.HighImportance
-			}
-			if buttons[i].Importance != desired {
-				buttons[i].Importance = desired
-				buttons[i].Refresh()
+			if r, ok := buttons[i].(fyne.Widget); ok {
+				r.Refresh()
 			}
 		}
 	}
 
 	for i, name := range names {
 		idx := i
-		// 可点击的 label（使用 Button 以获得按压样式）
-		btn := widget.NewButton("LABEL: "+name, func() {
+		// 可点击的 label（无圆角，自定义实现，文本左对齐）
+		// 为了实现 hover 效果，我们传入一个 onHover 回调，用来更新对应的 header 背景颜色
+		hoverIdx := idx
+		onHover := func(h bool) {
+			if btnBgs[hoverIdx] == nil {
+				return
+			}
+			if h {
+				// hover 时略微提高亮度
+				btnBgs[hoverIdx].FillColor = hslToNRGBA(originalH, originalS, clamp01(originalL+0.02))
+			} else {
+				// 非 hover 时恢复到按激活状态计算的饱和度/亮度
+				s := originalS
+				if hoverIdx != activeIndex {
+					s = clamp01(originalS - 0.10)
+				}
+				btnBgs[hoverIdx].FillColor = hslToNRGBA(originalH, s, clamp01(originalL-0.10))
+			}
+			btnBgs[hoverIdx].Refresh()
+		}
+		btn := newLabelButton("LABEL: "+name, func() {
 			if activeIndex == idx {
 				return
 			}
-
-			// 更新所有内容的背景色（根据当前激活索引决定是否降低饱和度）
-			for j := range contentContainers {
-				c := contentContainers[j]
-				if c == nil || len(c.Objects) == 0 {
-					continue
-				}
-				rect, ok := c.Objects[0].(*canvas.Rectangle)
-				if !ok {
-					continue
-				}
-				s := originalS
-				if j != activeIndex {
-					s = clamp01(originalS - 0.10)
-				}
-				rect.FillColor = hslToNRGBA(originalH, s, clamp01(originalL-0.10))
-				rect.Refresh()
-			}
-
-			// 已移除动画：直接切换 activeIndex 并更新显示与样式（无动画）
+			// 直接切换 activeIndex 并更新显示与样式（无动画）
 			activeIndex = idx
 			for j := range contentContainers {
 				if contentContainers[j] != nil {
@@ -119,16 +209,26 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 					}
 				}
 			}
+			// 当激活项变更时，需要更新所有 header 背景色（refreshHeaders 会处理）
 			refreshHeaders()
-		})
+		}, onHover)
 		buttons[i] = btn
 
 		status := canvas.NewText("status:OK", foregroundColorFor(hslToNRGBA(originalH, originalS, clamp01(originalL-0.10))))
-		status.Alignment = fyne.TextAlignTrailing
+		status.Alignment = fyne.TextAlignCenter
 		statusTexts[i] = status
 
-		// header：按钮占左 70%，状态占右 30%
-		header := container.New(&twoColumnLayout{LeftRatio: 0.7}, container.NewStack(btn), status)
+		// header：为按钮创建背景矩形以控制饱和度，按钮占左 70%，状态占右 30%
+		sBtn := originalS
+		if i != activeIndex {
+			sBtn = clamp01(originalS - 0.10)
+		}
+		bg := canvas.NewRectangle(hslToNRGBA(originalH, sBtn, clamp01(originalL-0.10)))
+		bg.SetMinSize(fyne.NewSize(0, 0))
+		btnBgs[i] = bg
+
+		btnLeft := container.NewStack(bg, btn)
+		header := container.New(&twoColumnLayout{LeftRatio: 0.7}, btnLeft, status)
 
 		// 内容容器（直接使用传入的 contents[i]）
 		wrapped := contents[i]
@@ -146,7 +246,7 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 		tabContainers[i] = tab
 	}
 
-	// 初始化背景色并显示激活 tab 的内容
+	// 初始化内容背景色（保持一致，不随激活状态变化），并显示激活 tab 的内容
 	for j := range contentContainers {
 		c := contentContainers[j]
 		if c == nil || len(c.Objects) == 0 {
@@ -156,16 +256,14 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 		if !ok {
 			continue
 		}
-		s := originalS
-		if j != activeIndex {
-			s = clamp01(originalS - 0.10)
-		}
-		rect.FillColor = hslToNRGBA(originalH, s, clamp01(originalL-0.10))
+		// 内容背景保持统一主色（仅轻微降低亮度），不随激活状态改变
+		rect.FillColor = hslToNRGBA(originalH, originalS, clamp01(originalL-0.10))
 		rect.Refresh()
 	}
 	if contentContainers[activeIndex] != nil {
 		contentContainers[activeIndex].Show()
 	}
+	// 刷新 header 背景与按钮样式
 	refreshHeaders()
 
 	return container.New(&verticalTabsLayout{}, tabContainers...)
