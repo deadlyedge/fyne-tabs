@@ -165,19 +165,6 @@ func parseWindowSize(size string) (float32, float32, error) {
 	return float32(width), float32(height), nil
 }
 
-// parseColor 根据字符串表达式解析颜色，目前支持 HSL 与十六进制格式。
-// func parseColor(value string) (color.Color, error) {
-// 	trimmed := strings.TrimSpace(strings.ToLower(value))
-// 	switch {
-// 	case strings.HasPrefix(trimmed, "hsl("):
-// 		return parseHSL(trimmed)
-// 	case strings.HasPrefix(trimmed, "#"):
-// 		return parseHex(trimmed)
-// 	default:
-// 		return nil, fmt.Errorf("unsupported color format: %s", value)
-// 	}
-// }
-
 // parseHex 解析 value 中的 #RRGGBB/#RGB 等十六进制色值，返回颜色对象和解析错误。
 func parseHex(value string) (color.Color, error) {
 	hex := strings.TrimPrefix(value, "#")
@@ -214,33 +201,6 @@ func parseHex(value string) (color.Color, error) {
 		A: uint8(parsed),
 	}, nil
 }
-
- // parseHSL 将 HSL 字符串转换为 NRGBA 颜色，返回颜色与可能的错误。
-// func parseHSL(value string) (color.Color, error) {
-// 	inner := strings.TrimSuffix(strings.TrimPrefix(value, "hsl("), ")")
-// 	inner = strings.ReplaceAll(inner, ",", " ")
-// 	fields := strings.Fields(inner)
-// 	if len(fields) != 3 {
-// 		return nil, fmt.Errorf("invalid hsl format: %s", value)
-// 	}
-
-// 	hue, err := strconv.ParseFloat(fields[0], 64)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("invalid hue: %w", err)
-// 	}
-
-// 	sat, err := parsePercentage(fields[1])
-// 	if err != nil {
-// 		return nil, fmt.Errorf("invalid saturation: %w", err)
-// 	}
-
-// 	light, err := parsePercentage(fields[2])
-// 	if err != nil {
-// 		return nil, fmt.Errorf("invalid lightness: %w", err)
-// 	}
-
-// 	return hslToNRGBA(hue, sat, light), nil
-// }
 
 // parseColorToHSL 解析配置色值并返回 H, S, L（H: 0-360, S/L: 0-1）。
 // 支持 hsl(...) 与 #RRGGBB/#RGB（若为其它格式，返回错误）。
@@ -372,21 +332,6 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-// adjustSaturationNRGBA 在 NRGBA 颜色上增加（或减少）饱和度（delta 可为负）。
-// delta 是绝对值，比如 -0.10 表示降低 10%（即 -0.10）。
-// func adjustSaturationNRGBA(c color.NRGBA, delta float64) color.NRGBA {
-// 	h, s, l := nrgbaToHSL(c)
-// 	s = clamp01(s + delta)
-// 	return hslToNRGBA(h, s, l)
-// }
-
-// // adjustLightnessNRGBA 在 NRGBA 颜色上增加（或减少）亮度（delta 可为负）。
-// func adjustLightnessNRGBA(c color.NRGBA, delta float64) color.NRGBA {
-// 	h, s, l := nrgbaToHSL(c)
-// 	l = clamp01(l + delta)
-// 	return hslToNRGBA(h, s, l)
-// }
-
 // loadFontResource 尝试加载字体文件，返回可供 Fyne 使用的资源对象。
 func loadFontResource(font string) (fyne.Resource, error) {
 	font = strings.TrimSpace(font)
@@ -517,25 +462,11 @@ func normalizeTabNames(names []string) []string {
 		}
 	}
 
-	// if total <= 0 {
-	// 	total = len(cleaned)
-	// }
-	// if total <= 0 {
-	// 	return cleaned
-	// }
-
-	// if len(cleaned) > total {
-	// 	cleaned = cleaned[:total]
-	// }
-
-	// for len(cleaned) < total {
-	// 	cleaned = append(cleaned, fmt.Sprintf("Tab %d", len(cleaned)+1))
-	// }
-
 	return cleaned
 }
 
  // buildTabContentHSL 根据标题与 HSL 颜色构建单个标签页内容（内部使用 HSL）。
+ // 内容区分为两列（宽度比 7:3），左侧显示 name 左对齐，右侧显示 "status:OK" 居中。
 func buildTabContentHSL(title string, h, s, l float64) *fyne.Container {
 	// label 背景在基础色上降低 10% 的亮度
 	labelL := clamp01(l - 0.10)
@@ -543,10 +474,55 @@ func buildTabContentHSL(title string, h, s, l float64) *fyne.Container {
 	background := canvas.NewRectangle(labelBg)
 	background.SetMinSize(fyne.NewSize(0, 0))
 
-	label := canvas.NewText(title, foregroundColorFor(labelBg))
-	label.Alignment = fyne.TextAlignCenter
+	left := canvas.NewText("CONTENT: "+title, foregroundColorFor(labelBg))
+	left.Alignment = fyne.TextAlignLeading
 
-	return container.NewStack(background, container.NewCenter(label))
+	right := canvas.NewText("status:OK", foregroundColorFor(labelBg))
+	right.Alignment = fyne.TextAlignCenter
+
+	cols := container.New(&twoColumnLayout{LeftRatio: 0.7}, left, right)
+
+	return container.NewStack(background, cols)
+}
+
+// twoColumnLayout 简单的两列布局，按 LeftRatio 分配宽度给左列，右列占剩余宽度。
+// 仅支持最多两个子对象，忽略额外对象；高度以可用高度为准。
+type twoColumnLayout struct {
+	LeftRatio float32
+}
+
+func (l *twoColumnLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	leftW := float32(math.Max(0, float64(size.Width*l.LeftRatio)))
+	rightW := size.Width - leftW
+
+	if len(objects) > 0 && objects[0] != nil {
+		objects[0].Resize(fyne.NewSize(leftW, size.Height))
+		objects[0].Move(fyne.NewPos(0, 0))
+	}
+	if len(objects) > 1 && objects[1] != nil {
+		objects[1].Resize(fyne.NewSize(rightW, size.Height))
+		objects[1].Move(fyne.NewPos(leftW, 0))
+	}
+}
+
+func (l *twoColumnLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var height float32
+	var leftW, rightW float32
+	if len(objects) > 0 && objects[0] != nil {
+		m := objects[0].MinSize()
+		if m.Height > height {
+			height = m.Height
+		}
+		leftW = m.Width
+	}
+	if len(objects) > 1 && objects[1] != nil {
+		m := objects[1].MinSize()
+		if m.Height > height {
+			height = m.Height
+		}
+		rightW = m.Width
+	}
+	return fyne.NewSize(leftW+rightW, height)
 }
 
  // newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
@@ -585,7 +561,7 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 	// 且其第一个对象为用作背景的 *canvas.Rectangle（由 buildTabContentHSL 创建）。
 	for i, name := range names {
 		idx := i
-		btn := widget.NewButton(name, func() {
+		btn := widget.NewButton("LABEL: "+name, func() {
 			if activeIndex == idx {
 				return
 			}
