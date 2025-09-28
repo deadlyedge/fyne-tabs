@@ -248,7 +248,7 @@ func parsePercentage(value string) (float64, error) {
 	return val / 100, nil
 }
 
- // hslToNRGBA 将 HSL 数值转换为 NRGBA 颜色。
+// hslToNRGBA 将 HSL 数值转换为 NRGBA 颜色。
 func hslToNRGBA(h, s, l float64) color.NRGBA {
 	h = math.Mod(h, 360)
 	if h < 0 {
@@ -465,8 +465,8 @@ func normalizeTabNames(names []string) []string {
 	return cleaned
 }
 
- // buildTabContentHSL 根据标题与 HSL 颜色构建单个标签页内容（内部使用 HSL）。
- // 内容区分为两列（宽度比 7:3），左侧显示 name 左对齐，右侧显示 "status:OK" 居中。
+// buildTabContentHSL 根据标题与 HSL 颜色构建单个标签页内容（内部使用 HSL）。
+// content 应为单一整体容器（不分栏），用来放置未来的内容，当前只显示标题文本。
 func buildTabContentHSL(title string, h, s, l float64) *fyne.Container {
 	// label 背景在基础色上降低 10% 的亮度
 	labelL := clamp01(l - 0.10)
@@ -474,15 +474,13 @@ func buildTabContentHSL(title string, h, s, l float64) *fyne.Container {
 	background := canvas.NewRectangle(labelBg)
 	background.SetMinSize(fyne.NewSize(0, 0))
 
-	left := canvas.NewText("CONTENT: "+title, foregroundColorFor(labelBg))
-	left.Alignment = fyne.TextAlignLeading
+	contentText := canvas.NewText("CONTENT: "+title, foregroundColorFor(labelBg))
+	contentText.Alignment = fyne.TextAlignLeading
 
-	right := canvas.NewText("status:OK", foregroundColorFor(labelBg))
-	right.Alignment = fyne.TextAlignCenter
+	// 使用单一整体容器承载未来内容（不分栏）
+	content := container.NewStack(contentText)
 
-	cols := container.New(&twoColumnLayout{LeftRatio: 0.7}, left, right)
-
-	return container.NewStack(background, cols)
+	return container.NewStack(background, content)
 }
 
 // twoColumnLayout 简单的两列布局，按 LeftRatio 分配宽度给左列，右列占剩余宽度。
@@ -525,8 +523,8 @@ func (l *twoColumnLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(leftW+rightW, height)
 }
 
- // newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
- // originalH, originalS, originalL 为基础 HSL 值（内部统一使用 HSL）
+// newVerticalTabs 构建带按钮和内容区域的自定义纵向标签组件。
+// originalH, originalS, originalL 为基础 HSL 值（内部统一使用 HSL）
 func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, originalS, originalL float64) fyne.CanvasObject {
 	if len(names) == 0 || len(contents) == 0 {
 		return widget.NewLabel("No tabs")
@@ -538,6 +536,7 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 
 	activeIndex := 0
 	buttons := make([]*widget.Button, len(names))
+	statusTexts := make([]*canvas.Text, len(names))
 	contentWrappers := make([]fyne.CanvasObject, len(names))
 	tabObjects := make([]fyne.CanvasObject, len(names)*2)
 
@@ -593,12 +592,21 @@ func newVerticalTabs(names []string, contents []fyne.CanvasObject, originalH, or
 		})
 		buttons[i] = btn
 
+		// 创建位于按钮右侧的状态文本，并将按钮与状态放入同一水平容器
+		status := canvas.NewText("status:OK", foregroundColorFor(hslToNRGBA(originalH, originalS, clamp01(originalL-0.10))))
+		status.Alignment = fyne.TextAlignTrailing
+		statusTexts[i] = status
+
+		// 让按钮占据左侧 70%，状态占右侧 30%
+		btnLeft := container.NewStack(btn)
+		btnContainer := container.New(&twoColumnLayout{LeftRatio: 0.7}, btnLeft, status)
+
 		// 直接使用 contents[i] 作为可显示/隐藏的内容容器
 		wrapper := contents[i]
 		wrapper.Hide()
 		contentWrappers[i] = wrapper
 
-		tabObjects[2*i] = btn
+		tabObjects[2*i] = btnContainer
 		tabObjects[2*i+1] = wrapper
 	}
 
