@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"github.com/BurntSushi/toml"
 )
 
@@ -104,19 +105,12 @@ func main() {
 		tabNames = []string{"Tab"}
 	}
 
-	tabs := container.NewAppTabs()
-	tabs.SetTabLocation(container.TabLocationLeading)
-
-	for _, name := range tabNames {
-		content := buildTabContent(name, tabColor)
-		tabs.Append(container.NewTabItem(name, content))
+	tabContents := make([]fyne.CanvasObject, len(tabNames))
+	for i, name := range tabNames {
+		tabContents[i] = buildTabContent(name, tabColor)
 	}
 
-	if len(tabs.Items) > 0 {
-		tabs.Select(tabs.Items[0])
-	}
-
-	window.SetContent(tabs)
+	window.SetContent(newVerticalTabs(tabNames, tabContents))
 	window.ShowAndRun()
 }
 
@@ -382,6 +376,142 @@ func buildTabContent(title string, tabColor color.Color) fyne.CanvasObject {
 	label.Alignment = fyne.TextAlignCenter
 
 	return container.NewMax(background, container.NewCenter(label))
+}
+
+func newVerticalTabs(names []string, contents []fyne.CanvasObject) fyne.CanvasObject {
+	if len(names) == 0 || len(contents) == 0 {
+		return widget.NewLabel("No tabs")
+	}
+
+	if len(contents) < len(names) {
+		names = names[:len(contents)]
+	}
+
+	activeIndex := 0
+
+	buttons := make([]*widget.Button, len(names))
+	contentWrappers := make([]fyne.CanvasObject, len(names))
+	tabObjects := make([]fyne.CanvasObject, 0, len(names)*2)
+
+	refreshButtons := func() {
+		for i, btn := range buttons {
+			if btn == nil {
+				continue
+			}
+			if i == activeIndex {
+				btn.Importance = widget.HighImportance
+			} else {
+				btn.Importance = widget.MediumImportance
+			}
+			btn.Refresh()
+		}
+	}
+
+	for i, name := range names {
+		idx := i
+		btn := widget.NewButton(name, func() {
+			if activeIndex == idx {
+				return
+			}
+			contentWrappers[activeIndex].Hide()
+			activeIndex = idx
+			contentWrappers[activeIndex].Show()
+			refreshButtons()
+		})
+		buttons[i] = btn
+
+		wrapper := container.NewMax(contents[i])
+		wrapper.Hide()
+		contentWrappers[i] = wrapper
+
+		tabObjects = append(tabObjects, btn, wrapper)
+	}
+
+	contentWrappers[activeIndex].Show()
+	refreshButtons()
+
+	return container.New(&verticalTabsLayout{}, tabObjects...)
+}
+
+type verticalTabsLayout struct{}
+
+func (l *verticalTabsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	buttonHeights := make([]float32, 0, len(objects)/2)
+	var totalButtonsHeight float32
+	activeContentIndex := -1
+	var activeContent fyne.CanvasObject
+	var activeContentMin fyne.Size
+
+	for i, obj := range objects {
+		if i%2 == 0 {
+			min := obj.MinSize()
+			buttonHeights = append(buttonHeights, min.Height)
+			totalButtonsHeight += min.Height
+			continue
+		}
+		if !obj.Visible() {
+			continue
+		}
+		activeContentIndex = i
+		activeContent = obj
+		activeContentMin = obj.MinSize()
+	}
+
+	var contentHeight float32
+	if activeContent != nil {
+		contentHeight = size.Height - totalButtonsHeight
+		if contentHeight < activeContentMin.Height {
+			contentHeight = activeContentMin.Height
+		}
+	}
+
+	y := float32(0)
+	buttonIndex := 0
+	activeButtonIndex := activeContentIndex / 2
+
+	for i, obj := range objects {
+		if i%2 != 0 {
+			continue
+		}
+
+		height := buttonHeights[buttonIndex]
+		obj.Resize(fyne.NewSize(size.Width, height))
+		obj.Move(fyne.NewPos(0, y))
+		y += height
+
+		if activeContent != nil && buttonIndex == activeButtonIndex {
+			activeContent.Resize(fyne.NewSize(size.Width, contentHeight))
+			activeContent.Move(fyne.NewPos(0, y))
+			y += contentHeight
+		}
+
+		buttonIndex++
+	}
+}
+
+func (l *verticalTabsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var width float32
+	var buttonHeight float32
+	var contentHeight float32
+
+	for i, obj := range objects {
+		min := obj.MinSize()
+		if min.Width > width {
+			width = min.Width
+		}
+		if i%2 == 0 {
+			buttonHeight += min.Height
+			continue
+		}
+		if !obj.Visible() {
+			continue
+		}
+		if min.Height > contentHeight {
+			contentHeight = min.Height
+		}
+	}
+
+	return fyne.NewSize(width, buttonHeight+contentHeight)
 }
 
 func foregroundColorFor(background color.Color) color.Color {
